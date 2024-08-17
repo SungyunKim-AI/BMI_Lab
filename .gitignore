@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+분당신장투석/report_data/
+
 # C extensions
 *.so
 
