@@ -1,27 +1,32 @@
 import os
 import copy
-import yaml
-from box import Box
 from tqdm import tqdm
-from utils import *
-from dataset import stratified_split
-from model import nEMGNet
+import wandb
+from utils.util import *
+from utils.gpu import *
+from dataset import *
+from models.nEMGNet import nEMGNet
 
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset, distributed
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from torch.cuda.amp import GradScaler, autocast
 from sklearn.model_selection import StratifiedKFold
 
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.multiprocessing as mp
+
 class Trainer:
     def __init__(self, dataset, model, optimizer, loss_fn, scheduler, config):
-        self.cfg = self.get_config(config)
-        self.set_device()
+        self.cfg = config
+        self.device = get_device()
         
-        self.set_dataloader(dataset)
+        self.dataset = dataset
+        self.set_dataloader()
         self.set_model(model)
         self.set_optimizer(optimizer)
         self.set_loss_fn(loss_fn)
@@ -33,27 +38,14 @@ class Trainer:
         
         self.epoch = 0
         self.checkpoint_path = "results/checkpoint.pth"
-        self.model_save_path = f"results/{model}_{self.cfg.version}.pth"
+        
+        wandb.init(project=self.cfg.wandb.project, config=self.cfg)
 
-    def get_config(self, path):
-        with open(path) as f:
-            config_yaml = yaml.load(f, Loader=yaml.FullLoader)
-            config = Box(config_yaml)
-        return config
-    
-    def set_device(self):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print('Using', torch.cuda.device_count(), 'GPU(s)')
-
-    def set_dataloader(self, dataset):
-        self.train_dataset, self.test_dataset, self.loss_weights = stratified_split(dataset, test_size=self.cfg.data_split)
-
-        self.train_dataloader = DataLoader(self.train_dataset, batch_size=self.cfg.train.batch_size, shuffle=True)
-        self.test_dataloader = DataLoader(self.test_dataset, batch_size=self.cfg.test.batch_size, shuffle=True)
 
     def set_model(self, model):
+        self.model_name = model
         if model == 'nEMGNet':
-            self.optimizer = nEMGNet(n_classes=self.cfg.n_classes).to(self.device)
+            self.optimizer = nEMGNet(n_classes=self.cfg.n_classes)
         else:
             raise Exception(f"{model} is not in model dict")
     
@@ -65,7 +57,11 @@ class Trainer:
     
     def set_loss_fn(self, loss_fn):
         if loss_fn == 'CrossEntropyLoss':
-            self.loss_fn = nn.CrossEntropyLoss(weight=self.loss_weights)
+            if self.cfg.weighted_loss == True:
+                loss_weights = get_weights(self.dataset)
+                self.loss_fn = nn.CrossEntropyLoss(weight=loss_weights)
+            else:
+                self.loss_fn = nn.CrossEntropyLoss()
         else:
             raise Exception(f"{loss_fn} is not in criterion dict")
     
@@ -76,64 +72,137 @@ class Trainer:
             raise Exception(f"{schdeduler} is not in schdeduler dict")
 
     
-    def train_one_epoch(self, X, y, scaler):
-        X = X.to(self.device)
-        y = y.to(self.device)
-        
-        self.optimizer.zero_grad()
-        with autocast(enabled=self.cfg.train.AMP):
-            y_preds = self.model(X)
-            loss = self.loss_fn(y_preds, y)
-        
-        self.train_losses.update(loss.detach().item(), self.cfg.batch_size)
-        scaler.scale(loss).backward()
-        scaler.step(self.optimizer)
-        scaler.update()
-    
-    def train(self):
-        results = [0.0]
-        for epoch in self.cfg.train.epochs:
-            scaler = GradScaler()
-            self.model.train()
-            
-            with tqdm(self.train_dataloader, unit="train_batch", desc=f'Train ({epoch}epoch)') as tqdm_loader:
-                for step, (X, y) in enumerate(tqdm_loader):
-                    self.train_one_epoch(X,y, scaler)
-                self.scheduler.step()
-            
-            if (epoch % self.cfg.test.step) == 0:
-                valid_loss = self.valid(epoch)
-                results.append(valid_loss)
-                
-                if (results[-2] < results[-1]) and self.cfg.test.save:
-                    torch.save(self.model.state_dict(), self.model_save_path)
-                    self.best_model = copy.deepcopy(self.model)
-                    
-            self.save_checkpoint(epoch, valid_loss)
-        
-        return self.best_model
-    
-    
-    
-    def valid(self, epoch):
-        self.model.eval()
-        with tqdm(self.test_dataloader, unit="valid_batch", desc=f'Valid ({epoch}epoch)') as tqdm_loader:
+    def train_one_epoch(self, dataloader, device):
+        scaler = GradScaler()
+        with tqdm(dataloader, unit="train_batch", desc=f'Train ({self.epoch}epoch)') as tqdm_loader:
             for step, (X, y) in enumerate(tqdm_loader):
-                X = X.to(self.device)
-                y = y.to(self.device)
+                X = X.to(device)
+                y = y.to(device)
                 
-                with torch.no_grad():
+                self.optimizer.zero_grad()
+                with autocast(enabled=self.cfg.train.AMP):
                     y_preds = self.model(X)
                     loss = self.loss_fn(y_preds, y)
                 
-                self.valid_losses.update(loss.detach().item(), self.cfg.test.batch_size)
-                self.preds_dict['preds'].append(y_preds.detach().item())
-                self.preds_dict['labels'].append(y.detach().item())
+                logging_loss = loss.detach().item()
+                self.train_losses.update(logging_loss, self.cfg.batch_size)
+                scaler.scale(loss).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
+        
+                wandb.log({"train/loss" : logging_loss})
+        
+        
+    
+    def training(self, rank, world_size, dataset):
+        if rank is not None:
+            setup(rank, world_size)
+            device = rank
+            model = self.model.to(device)
+            model = DDP(model, device_ids=[device])
+        else:
+            device = self.device
+            model = self.model.to(device)
+            rank = 0
+            
+        train_dataloader, valid_dataloader = create_dataloaders(dataset)
+        
+        best_loss = 1.0
+        for epoch in self.cfg.train.epochs:
+            self.epoch = epoch
+            model.train()
+            
+            self.train_one_epoch(train_dataloader, device)
+            self.scheduler.step()
+            
+            
+            if (rank == 0) and (epoch % self.cfg.test.step) == 0:
+                valid_loss = self.valid(valid_dataloader, device)
                 
+                if (best_loss > valid_loss) and self.cfg.test.save:
+                    torch.save(model.state_dict(), f"results/{self.model_name}_{self.cfg.version}.pth")
+                    self.best_model = copy.deepcopy(model)
+                    best_loss = valid_loss
+                    
+                self.save_checkpoint(valid_loss)
+            
+        
+        
+    def train_KFolds(self):
+        self.models = []
+        skf = StratifiedKFold(n_splits=self.cfg.n_folds, shuffle=True, random_state=self.cfg.seed)
+        for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(self.dataset)), self.dataset.label)):
+            print(f'======== Fold {fold + 1} ========')
+            
+            train_subset = Subset(self.dataset, train_idx)
+            valid_subset = Subset(self.dataset, val_idx)
 
-    def save_checkpoint(self, epoch, valid_loss):
+            if self.cfg.gpu_type == 'multi_gpu':
+                world_size = get_multi_device(self.cfg)
+                subset = {'train': train_subset, 'valid': valid_subset}
+                mp.spawn(self.training, args=(world_size, subset), nprocs=world_size, join=True)
+                wandb.finish()
+                cleanup()
+            else:
+                self.training(rank=None, world_size=None, dataset={'train': train_subset, 'valid': valid_subset})
+            self.models.append(self.best_model.state_dict())
+        
+        torch.save(self.models, f"results/ensemble_{self.model_name}_{self.cfg.version}.pth")
+        
+            
+    def train(self):
+        if self.cfg.n_folds == 1:
+            if self.cfg.gpu_type == 'multi_gpu':
+                world_size = get_multi_device(self.cfg)
+                mp.spawn(self.training, args=(world_size, self.dataset), nprocs=world_size, join=True)
+                wandb.finish()
+                cleanup()
+                return self.best_model
+            else:
+                self.training(rank=None, world_size=None, dataset=self.dataset)
+                return self.best_model
+        else:
+            self.train_KFolds()
+            return self.models
+    
+    def valid(self, model, device):
+        model.eval()
+        
+        with tqdm(self.test_dataloader, unit="valid_batch", desc=f'Valid ({self.epoch}epoch)') as tqdm_loader:
+            for step, (X, y) in enumerate(tqdm_loader):
+                X, y = X.to(device), y.to(device)
+                
+                with torch.no_grad():
+                    y_preds = model(X)
+                    loss = self.loss_fn(y_preds, y)
+                
+                logging_loss = loss.detach().item()
+                self.valid_losses.update(logging_loss, self.cfg.test.batch_size)
+                self.preds_dict['preds'].extend(y_preds.detach().item())
+                self.preds_dict['labels'].extend(y.detach().item())
+                
+            metrics_macro = compute_metrics(self.preds_dict, average='macro')
+            metrics_weighted = compute_metrics(self.preds_dict, average='weighted')
+            
+            wandb.log({
+                "valid/loss" : logging_loss,
+                "valid/acc" : metrics_macro['acc'],
+                "valid/confusion_matrix" : metrics_macro['confusion_matrix'],
+                "valid/macro/precision" : metrics_macro['precision'],
+                "valid/macro/recall" : metrics_macro['recall'],
+                "valid/macro/f1" : metrics_macro['f1'],
+                "valid/macro/roc_auc" : metrics_macro['roc_auc'],
+                "valid/macro/precision" : metrics_weighted['precision'],
+                "valid/macro/recall" : metrics_weighted['recall'],
+                "valid/macro/f1" : metrics_weighted['f1'],
+                "valid/macro/roc_auc" : metrics_weighted['roc_auc']
+            })
+        
+        return self.valid_losses.avg
+
+    def save_checkpoint(self, valid_loss):
         checkpoint = {
-            'epoch': epoch,
+            'epoch': self.epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),

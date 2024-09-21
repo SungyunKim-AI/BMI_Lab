@@ -4,6 +4,13 @@ root_dir: '/nEMG/data/sv90060'
 seed: 123
 n_classes: 7
 data_split: 0.2
+n_folds: 5              # 1 : Full data, >2 : K-Folds
+gpu_type: 'single_gpu'  # Options : cpu / single_gpu / multi_gpu
+n_gpus : 4              # 4
+num_wokers: 16          # 16
+
+wandb:
+  project: nEMG
 
 train:
   epochs: 100

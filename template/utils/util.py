@@ -1,13 +1,24 @@
 import os
 import random
 import pickle
-import numpy as np
+import yaml
 import torch
+import numpy as np
+from box import Box
+
+import torch
+import torch.nn.functional as F
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score, accuracy_score
 
 def load_pickle(path: str):
     with open(path, 'rb') as f:
         return pickle.load(f)
 
+def get_config(self, path):
+    with open(path) as f:
+        config_yaml = yaml.load(f, Loader=yaml.FullLoader)
+        config = Box(config_yaml)
+    return config
 
 def set_seed(seed: int):
     random.seed(seed)           # Python의 기본 랜덤 시드 설정
@@ -41,3 +52,28 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+
+def compute_metrics(preds_dict, average='macro'):
+    y_pred_proba = F.softmax(preds_dict['preds'], dim=1).numpy()
+    y_preds = np.array(preds_dict['preds'])
+    y = np.array(preds_dict['labels'])
+    
+    precision = precision_score(y, y_preds, average=average)
+    recall = recall_score(y, y_preds, average=average)
+    f1 = f1_score(y, y_preds, average=average)
+    acc = accuracy_score(y, y_preds)
+    
+    y_true_onehot = np.eye(y_pred_proba.shape[1])[y]
+    roc_auc = roc_auc_score(y_true_onehot, y_pred_proba, average=average, multi_class='ovr')
+    
+    conf_matrix = confusion_matrix(y, y_preds)
+    
+    return {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'acc': acc, 
+        'roc_auc': roc_auc,
+        'confusion_matrix': conf_matrix
+    }
+    

@@ -46,8 +46,6 @@ def train(rank, world_size):
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     dataloader = DataLoader(dataset, batch_size=32, sampler=sampler, num_workers=16)
     
-    return
-    
     # 모델, 손실 함수, 옵티마이저 정의
     model = SimpleModel().to(rank)
     model = DDP(model, device_ids=[rank])
