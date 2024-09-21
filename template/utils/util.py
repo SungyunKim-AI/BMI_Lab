@@ -14,7 +14,7 @@ def load_pickle(path: str):
     with open(path, 'rb') as f:
         return pickle.load(f)
 
-def get_config(self, path):
+def get_config(path):
     with open(path) as f:
         config_yaml = yaml.load(f, Loader=yaml.FullLoader)
         config = Box(config_yaml)

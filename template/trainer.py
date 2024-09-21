@@ -6,6 +6,7 @@ from utils.util import *
 from utils.gpu import *
 from dataset import *
 from models.nEMGNet import nEMGNet
+from models.SimpleCNN import SimpleCNN
 
 import torch
 from torch import nn
@@ -23,10 +24,9 @@ import torch.multiprocessing as mp
 class Trainer:
     def __init__(self, dataset, model, optimizer, loss_fn, scheduler, config):
         self.cfg = config
-        self.device = get_device()
+        self.device = get_device(self.cfg)
         
         self.dataset = dataset
-        self.set_dataloader()
         self.set_model(model)
         self.set_optimizer(optimizer)
         self.set_loss_fn(loss_fn)
@@ -44,8 +44,10 @@ class Trainer:
 
     def set_model(self, model):
         self.model_name = model
-        if model == 'nEMGNet':
-            self.optimizer = nEMGNet(n_classes=self.cfg.n_classes)
+        if model == 'SimpleCNN':
+            self.model = SimpleCNN()
+        elif model == 'nEMGNet':
+            self.model = nEMGNet(n_classes=self.cfg.n_classes)
         else:
             raise Exception(f"{model} is not in model dict")
     
@@ -57,7 +59,7 @@ class Trainer:
     
     def set_loss_fn(self, loss_fn):
         if loss_fn == 'CrossEntropyLoss':
-            if self.cfg.weighted_loss == True:
+            if self.cfg.train.weighted_loss == True:
                 loss_weights = get_weights(self.dataset)
                 self.loss_fn = nn.CrossEntropyLoss(weight=loss_weights)
             else:
@@ -95,20 +97,19 @@ class Trainer:
         
     
     def training(self, rank, world_size, dataset):
+        train_dataloader, valid_dataloader = create_dataloaders(dataset, self.cfg, rank, world_size)
+        
         if rank is not None:
             setup(rank, world_size)
             device = rank
-            model = self.model.to(device)
-            model = DDP(model, device_ids=[device])
+            model = DDP(self.model.to(device), device_ids=[device])
         else:
             device = self.device
             model = self.model.to(device)
             rank = 0
-            
-        train_dataloader, valid_dataloader = create_dataloaders(dataset)
         
         best_loss = 1.0
-        for epoch in self.cfg.train.epochs:
+        for epoch in range(self.cfg.train.epochs):
             self.epoch = epoch
             model.train()
             
@@ -116,10 +117,10 @@ class Trainer:
             self.scheduler.step()
             
             
-            if (rank == 0) and (epoch % self.cfg.test.step) == 0:
-                valid_loss = self.valid(valid_dataloader, device)
+            if (rank == 0) and (epoch % self.cfg.valid.step) == 0:
+                valid_loss = self.valid(model, valid_dataloader, device)
                 
-                if (best_loss > valid_loss) and self.cfg.test.save:
+                if (best_loss > valid_loss) and self.cfg.save_model:
                     torch.save(model.state_dict(), f"results/{self.model_name}_{self.cfg.version}.pth")
                     self.best_model = copy.deepcopy(model)
                     best_loss = valid_loss
@@ -165,10 +166,10 @@ class Trainer:
             self.train_KFolds()
             return self.models
     
-    def valid(self, model, device):
+    def valid(self, model, dataloader, device):
         model.eval()
         
-        with tqdm(self.test_dataloader, unit="valid_batch", desc=f'Valid ({self.epoch}epoch)') as tqdm_loader:
+        with tqdm(dataloader, unit="valid_batch", desc=f'Valid ({self.epoch}epoch)') as tqdm_loader:
             for step, (X, y) in enumerate(tqdm_loader):
                 X, y = X.to(device), y.to(device)
                 
@@ -177,7 +178,7 @@ class Trainer:
                     loss = self.loss_fn(y_preds, y)
                 
                 logging_loss = loss.detach().item()
-                self.valid_losses.update(logging_loss, self.cfg.test.batch_size)
+                self.valid_losses.update(logging_loss, self.cfg.valid.batch_size)
                 self.preds_dict['preds'].extend(y_preds.detach().item())
                 self.preds_dict['labels'].extend(y.detach().item())
                 

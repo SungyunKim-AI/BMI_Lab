@@ -21,19 +21,21 @@ class CustomDataset(Dataset):
         """
         self.root_dir = root_dir
         self.transform = transform
-        self.label_map = {'nl':0, 'rd':1, 'fn':2, 'mn':3, 'pn':4, 'bp':5, 'sm':6}
+        self.classes = ['nl', 'rd', 'fn', 'mn', 'pn', 'bp', 'sm']
+        self.class_to_idx = {'nl':0, 'rd':1, 'fn':2, 'mn':3, 'pn':4, 'bp':5, 'sm':6}
         
         self.cohort = pd.read_parquet(cohort_file, engine='pyarrow')
-
+        self.targets = self.cohort['label'].values
+        
     def __len__(self):
         return len(self.file_list)
     
     def __getitem__(self, idx):
-        signal_path = os.path.join(self.root_dir, self.cohort.loc[idx, 'file_name'])
-        signal = load_pickle(signal_path)
-        label = self.cohort.loc[idx, 'label'].apply(lambda x : self.label_map[x])
+        data_path = os.path.join(self.root_dir, self.cohort.loc[idx, 'file_name'])
+        data = load_pickle(data_path)
+        target = self.cohort.loc[idx, 'label'].apply(lambda x : self.class_to_idx[x])
         
-        sample = {'signal': signal, 'label':label}
+        sample = {'data': data, 'target':target}
         
         if self.transform:
             sample = self.transform(sample)
@@ -43,7 +45,7 @@ class CustomDataset(Dataset):
 
 # 데이터 분포에 맞게, train / test split
 def stratified_split(dataset, test_size=0.2):
-    labels = np.array(dataset.label)
+    labels = np.array(dataset.targets)
     num_classes = len(np.unique(labels))
     
     train_indices, test_indices = [], []
@@ -59,9 +61,9 @@ def stratified_split(dataset, test_size=0.2):
 
 
 def get_weights(dataset):
-    train_targets = np.array(dataset.label)
+    train_targets = np.array(dataset.targets)
     class_distribution = Counter(train_targets)
-    print('Class Distribution : ', class_distribution)
+    print('Class Distribution : ', dict(sorted(class_distribution.items())))
     
     total_samples = sum(class_distribution.values())
     class_weights = {cls: total_samples / count for cls, count in class_distribution.items()}
@@ -82,7 +84,7 @@ def create_dataloaders(dataset, cfg, rank=None, world_size=None):
     }
     
     valid_loader_params = {
-        'batch_size': cfg.test.batch_size,
+        'batch_size': cfg.valid.batch_size,
         'shuffle': False,
     }
     
