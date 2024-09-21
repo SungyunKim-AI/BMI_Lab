@@ -19,7 +19,7 @@ from sklearn.model_selection import StratifiedKFold
 class Trainer:
     def __init__(self, dataset, model, optimizer, loss_fn, scheduler, config):
         self.cfg = self.get_config(config)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.set_device()
         
         self.set_dataloader(dataset)
         self.set_model(model)
@@ -40,6 +40,10 @@ class Trainer:
             config_yaml = yaml.load(f, Loader=yaml.FullLoader)
             config = Box(config_yaml)
         return config
+    
+    def set_device(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print('Using', torch.cuda.device_count(), 'GPU(s)')
 
     def set_dataloader(self, dataset):
         self.train_dataset, self.test_dataset, self.loss_weights = stratified_split(dataset, test_size=self.cfg.data_split)

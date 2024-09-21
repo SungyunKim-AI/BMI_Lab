@@ -19,58 +19,9 @@ from torch.cuda.amp import GradScaler, autocast
 from sklearn.model_selection import StratifiedKFold
 
 
-def get_config(path):
-    with open(path) as f:
-        config_yaml = yaml.load(f, Loader=yaml.FullLoader)
-        config = Box(config_yaml)
-    return config
-
-def train(cfg, dataloader, model, loss_fn, optimizer, epoch, scheduler, device):
-    scaler = GradScaler()
-    model.train()
-    losses = AverageMeter()
-    
-    with tqdm(dataloader, unit="train_batch", desc=f'Train ({epoch}epoch)') as tqdm_loader:
-        for step, (X, y) in enumerate(tqdm_loader):
-            X, y = X.to(device), y.to(device)
-            
-            optimizer.zero_grad()
-            with autocast(enabled=cfg.AMP):
-                y_preds = model(X)
-                loss = loss_fn(y_preds, y)
-            
-            losses.update(loss.detach().item(), cfg.batch_size)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-    
-    scheduler.step()
-            
-
-def valid(cfg, dataloader, model, loss_fn, epoch, device):
-    model.eval()
-    losses = AverageMeter()
-    preds_dict = {'preds':[], 'labels':[]}
-    with tqdm(dataloader, unit="valid_batch", desc=f'Train ({epoch}epoch)') as tqdm_loader:
-        for step, (X, y) in enumerate(tqdm_loader):
-            X, y = X.to(device), y.to(device)
-            
-            with torch.no_grad():
-                y_preds = model(X)
-                loss = loss_fn(y_preds, y)
-            
-            losses.update(loss.detach().item(), cfg.batch_size)
-            preds_dict['preds'].append(y_preds.detach().item())
-            preds_dict['labels'].append(y.detach().item())
-            
-
-    return losses.avg, preds_dict
-
-def save_model(model):
-    model
-
 def main():
     # ============= Init ============= 
+    
     cfg = get_config('config.yaml')
     set_seed(cfg.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
