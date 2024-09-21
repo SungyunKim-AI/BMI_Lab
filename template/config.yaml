@@ -3,6 +3,7 @@ version: v1
 root_dir: '/nEMG/data/sv90060'
 seed: 123
 n_classes: 7
+data_split: 0.2
 
 train:
   epochs: 100
