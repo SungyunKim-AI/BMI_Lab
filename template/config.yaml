@@ -1,20 +1,24 @@
+project: nEMG
 version: v1
 
-root_dir: 'DATA PATH'
+root_dir: 'DATA_PATH'
 seed: 123
 n_classes: 10
 data_split: 0.2
-n_folds: 1              # 1 : Full data, >2 : K-Folds
-gpu_type: 'cpu'         # Options : cpu / single_gpu / multi_gpu
+n_folds: 1              # 1 : Full data, >=2 : K-Folds
+gpu_type: single_gpu         # Options : cpu / single_gpu / multi_gpu
 save_model : true
 
 # multi gpu
-n_gpus : 4              # 4
-num_wokers: 16          # 16
+n_gpus : 1              # 1: single_gpu, >=2 : K-Folds
+num_workers: 0          # single_gpu : 0, multi_gput : 16
 
 # logging W&B
-wandb:
-  project: 'nEMG'
+log:
+  dir: './logs'
+  platform: 'tensorboard' # Options: tensorboard / wandb
+  interval: 10
+  
 
 # Train Hyperparameters
 train:

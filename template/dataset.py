@@ -89,7 +89,7 @@ def create_dataloaders(dataset, cfg, rank=None, world_size=None):
     }
     
     if cfg.gpu_type in ['single_gpu', 'multi_gpu']:
-        params = {'num_workers': cfg.num_workers, 'pin_memory': True, 'non_blocking': True}
+        params = {'num_workers': cfg.num_workers, 'pin_memory': True}
         train_loader_params.update(params)
         valid_loader_params.update(params)
         

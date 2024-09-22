@@ -54,13 +54,14 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 def compute_metrics(preds_dict, average='macro'):
-    y_pred_proba = F.softmax(preds_dict['preds'], dim=1).numpy()
     y_preds = np.array(preds_dict['preds'])
+    y_pred_proba = F.softmax(torch.tensor(y_preds), dim=1).numpy()
+    y_preds = np.argmax(y_pred_proba, axis=1)
     y = np.array(preds_dict['labels'])
     
-    precision = precision_score(y, y_preds, average=average)
-    recall = recall_score(y, y_preds, average=average)
-    f1 = f1_score(y, y_preds, average=average)
+    precision = precision_score(y, y_preds, average=average, zero_division=0)
+    recall = recall_score(y, y_preds, average=average, zero_division=0)
+    f1 = f1_score(y, y_preds, average=average, zero_division=0)
     acc = accuracy_score(y, y_preds)
     
     y_true_onehot = np.eye(y_pred_proba.shape[1])[y]

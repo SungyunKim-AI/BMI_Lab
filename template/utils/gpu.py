@@ -1,19 +1,24 @@
 import os
 import torch
+import gc
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 
 def get_device(cfg):
     if cfg.gpu_type == 'cpu':
+        print("Training on CPU")
         return torch.device('cpu')
     elif cfg.gpu_type == 'single_gpu':
         if torch.cuda.is_available():
+            print("Training on single GPU")
             return torch.device('cuda')
         else:
             raise Exception("CUDA is not available.")
     elif cfg.gpu_type == 'multi_gpu':
-        return
+        if torch.cuda.is_available() and (torch.cuda.device_count() > 1):
+            print("Training on multi GPU")
+        return 'multi_gpu'
     else:
         raise Exception(f"{cfg.gpu_type} is not in GPU options")
 
@@ -46,3 +51,12 @@ def setup(rank, world_size, port='12355'):
 
 def cleanup():
     dist.destroy_process_group()
+    
+
+def cleanup_cache():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        
+    gc.collect()
+        
