@@ -1,0 +1,65 @@
+version: "3"
+services:
+
+  #gpu status in node(노드소유의 일반 리소스 중 GPU들의 상태) 모니터링용 프로그램
+  #gpu는 마스터노드에 종속된 DB에서 슬롯단위로 인스턴스와 연관해서 관리한다.
+  dcgm_exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.1.8-3.1.5-ubuntu20.04
+    restart: unless-stopped
+    privileged : true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    cap_add:
+      - SYS_ADMIN
+    ports:
+      - "49000:9400"
+
+  #containers in node(노드 내부의 컨테이너 상태) 모니터링용 프로그램
+  #컨테이너가 사용가능한 자원은 마스터 노드에 종속된 DB에서 코더단위로 관리한다
+  #이미지(docker_stats_exporter) 내부의 프로그램에서 RAM을 관리 하는 부분에 버그가 있으므로 수정 후 사용 할 것.
+#  cadvisor:
+#    image: gcr.io/cadvisor/cadvisor:latest
+#    container_name: cadvisor
+#    restart: unless-stopped
+#    privileged : true
+#    ports:
+#    - 49001:8080
+#    volumes:
+#    - /:/rootfs:ro
+#    - /var/run:/var/run:rw
+#    - /sys:/sys:ro
+#    - /var/lib/docker/:/var/lib/docker:ro
+#    - /dev/disk/:/dev/disk:ro
+
+  docker-stats:
+    image: wywywywy/docker_stats_exporter:latest
+    container_name: docker-stats
+    restart: always
+    privileged : true
+    ports:
+    - 49001:9487
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+
+  #node status(컴퓨터의 현재 상태) 모니터링용 프로그램
+  #노드(서버컴퓨터)의 상태 그 자체를 모니터링
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - 49002:9100
