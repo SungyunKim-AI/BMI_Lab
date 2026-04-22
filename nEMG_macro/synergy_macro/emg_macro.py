@@ -92,14 +92,12 @@ if __name__ == '__main__':
                         
 
             # 스크롤하며 추가 데이터 추출
-            if cnt >= 24:
-                pyautogui.click(1192, 453 + 20 * last_idx) 
-                
+            if cnt >= 24:                
                 while True:
-                    img_old = pyautogui.screenshot().crop((600, 450, 1200, 960))
+                    img_old = pyautogui.screenshot().crop((600, 500, 1000, 700))
                     pyautogui.press('down')
                     time.sleep(1)
-                    img_new = pyautogui.screenshot().crop((600, 450, 1200, 960))
+                    img_new = pyautogui.screenshot().crop((600, 500, 1000, 700))
                     diff = ImageChops.difference(img_old, img_new)
                     
                     if not diff.getbbox():
