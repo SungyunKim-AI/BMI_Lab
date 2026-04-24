@@ -14,13 +14,28 @@ def wait_for_wizard_load(x, y, rgb, timeout=20):
         time.sleep(0.5) # 0.5초 간격으로 확인
     return False # 시간 초과 시 실패 리턴
 
+def is_exact_color_in_region(region, target_rgb):
+    img = pyautogui.screenshot(region=region)
+    img_array = np.array(img)
+    
+    # 픽셀 값이 target_rgb와 정확히 일치하는지 비교 (R, G, B 모두 일치)
+    # axis=-1은 마지막 차원(RGB)을 기준으로 비교하라는 의미입니다.
+    match_mask = np.all(img_array == target_rgb, axis=-1)
+    
+    # DEBUG
+    # if not np.any(match_mask):
+    #     img.save("debug_failed_region.png")
+        
+    return np.any(match_mask)
+
 def wait_for_save_confirm(timeout=20):
     start_time = time.time()
     while time.time() - start_time < timeout:
-        # 마법사 창이 떴을 때만 나타나는 특정 위치의 픽셀 확인
-        if pyautogui.pixelMatchesColor(798, 511, (252, 225, 0)): 
+        # 경고 아이콘이 나타날 수 있는 범위 설정 (x, y, width, height)
+        if is_exact_color_in_region((750, 450, 250, 200), (252, 225, 0)):
             return 'overload'
-        elif pyautogui.pixelMatchesColor(756, 553, (240, 240, 240)) and pyautogui.pixelMatchesColor(1163, 594, (240, 240, 240)): 
+        elif pyautogui.pixelMatchesColor(770, 560, (240, 240, 240)) and \
+            pyautogui.pixelMatchesColor(1155, 580, (240, 240, 240)): 
             return 'save'  
         else:
             time.sleep(0.5) # 0.5초 간격으로 확인
@@ -44,13 +59,21 @@ def extract(i):
         wait_result = wait_for_save_confirm()
         if wait_result == 'overload':
             pyautogui.click(1030, 580)
-            if wait_for_save_confirm() == 'save':
+            time.sleep(1.5)
+            
+            # 덮어쓰기 후 다시 저장 창이 뜨는지 재확인
+            second_wait = wait_for_save_confirm(timeout=10)
+            if second_wait == 'save':
                 pyautogui.click(1110, 575)
+                time.sleep(0.5)
+                return True
+            
             return True
         elif wait_result == 'save':
             pyautogui.click(1110, 575)
             return True
         else:
+            pyautogui.screenshot(f'debug_error_{time.time()}.png')
             return False
     else:
         return False
@@ -94,9 +117,10 @@ if __name__ == '__main__':
             # 스크롤하며 추가 데이터 추출
             if cnt >= 24:                
                 while True:
+                    time.sleep(1)
                     img_old = pyautogui.screenshot().crop((600, 500, 1000, 700))
                     pyautogui.press('down')
-                    time.sleep(1)
+                    time.sleep(0.5)
                     img_new = pyautogui.screenshot().crop((600, 500, 1000, 700))
                     diff = ImageChops.difference(img_old, img_new)
                     
