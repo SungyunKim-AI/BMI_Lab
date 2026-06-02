@@ -88,7 +88,7 @@ if __name__ == '__main__':
 
         for k in range(13): # 최대 방문건수 13회로 가정
             # 방문탭에 더 이상 방문이 없으면 종료
-            time.sleep(1)
+            time.sleep(2)
             pixel = pyautogui.screenshot().getpixel((490, 133 + 20 * k))
             if pixel == (255,255,255):
                 break
